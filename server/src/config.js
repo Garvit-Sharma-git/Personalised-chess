@@ -28,15 +28,36 @@ fs.mkdirSync(dataDir, { recursive: true });
 export const config = {
   env: process.env.NODE_ENV || "development",
   port: int(process.env.PORT, 4000),
-  clientOrigin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
+  // Comma-separated list of browser origins allowed to call this API.
+  // Entries may use a leading "*." wildcard (e.g. *.vercel.app for previews).
+  clientOrigins: (process.env.CLIENT_ORIGIN || "http://localhost:5173,http://localhost:4173")
+    .split(",")
+    .map((s) => s.trim().replace(/\/$/, ""))
+    .filter(Boolean),
 
   dataDir,
   dbFile: process.env.DB_FILE || path.join(dataDir, "chess.db"),
+
+  // Optional hosted libSQL (Turso), for hosts without a persistent disk.
+  // Without TURSO_DATABASE_URL the app uses a plain local SQLite file, which is
+  // what local development wants.
+  //
+  // Statements run against the primary over the network. libSQL's *embedded
+  // replica* mode was measured to serve stale reads immediately after a write
+  // (even with an explicit sync), which would corrupt game state here because
+  // the move list is re-read right after each move is inserted. So: remote only.
+  turso: {
+    url: process.env.TURSO_DATABASE_URL || "",
+    authToken: process.env.TURSO_AUTH_TOKEN || "",
+  },
 
   jwtSecret: process.env.JWT_SECRET || "dev-only-insecure-secret-change-me",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "30d",
   cookieName: "chess_token",
   cookieSecure: bool(process.env.COOKIE_SECURE, false),
+  // "lax" for same-origin deploys; "none" is required when the browser app is
+  // on a different site than the API (and then the cookie must also be Secure).
+  cookieSameSite: (process.env.COOKIE_SAMESITE || "lax").toLowerCase(),
 
   // The single account allowed to receive live in-game move suggestions.
   // Enforced server-side; the client flag is only a rendering hint.
@@ -71,6 +92,23 @@ export const config = {
     timeoutMs: int(process.env.GROQ_TIMEOUT_MS, 45000),
   },
 };
+
+/** Does `origin` match the configured allow-list (supporting *.host wildcards)? */
+export function isAllowedOrigin(origin) {
+  if (!origin) return true; // same-origin / non-browser callers send no Origin
+  const clean = origin.replace(/\/$/, "");
+  return config.clientOrigins.some((allowed) => {
+    if (allowed === "*") return true;
+    if (allowed.startsWith("*.")) {
+      try {
+        return new URL(clean).hostname.endsWith(allowed.slice(1));
+      } catch {
+        return false;
+      }
+    }
+    return allowed === clean;
+  });
+}
 
 export function isCoachAccount(email) {
   if (!email) return false;

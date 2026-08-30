@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { api } from "./api.js";
+import { api, setToken } from "./api.js";
 import { disconnectSocket } from "./socket.js";
 
 const AuthContext = createContext(null);
@@ -14,6 +14,7 @@ export function AuthProvider({ children }) {
       setUser(data.user || null);
       return data.user || null;
     } catch {
+      setToken(null);
       setUser(null);
       return null;
     } finally {
@@ -41,6 +42,7 @@ export function AuthProvider({ children }) {
     try {
       await api("/auth/logout", { method: "POST" });
     } finally {
+      setToken(null);
       disconnectSocket();
       setUser(null);
     }

@@ -4,8 +4,8 @@ import fs from "node:fs";
 import express from "express";
 import cors from "cors";
 import { Server as SocketServer } from "socket.io";
-import { config, ROOT } from "./config.js";
-import { db } from "./db.js";
+import { config, ROOT, isAllowedOrigin } from "./config.js";
+import { db, dbInfo } from "./db.js";
 import { cookieParser } from "./lib/auth.js";
 import authRoutes from "./routes/auth.js";
 import gameRoutes from "./routes/games.js";
@@ -19,14 +19,16 @@ const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
-// Allow the configured dev client plus whatever origin this server is itself
-// served from (browsers send Origin on same-origin module/fetch requests too).
+// Allow the configured client origins plus whatever origin this server is
+// itself served from (browsers send Origin on same-origin requests too).
 // Anything else simply gets no CORS headers, which the browser then blocks.
+function originAllowed(origin, req) {
+  if (isAllowedOrigin(origin)) return true;
+  return origin === `${req.protocol}://${req.get("host")}`;
+}
 app.use((req, res, next) => {
-  const self = `${req.protocol}://${req.get("host")}`;
-  const allowed = new Set([config.clientOrigin, self]);
   cors({
-    origin: (origin, cb) => cb(null, !origin || allowed.has(origin)),
+    origin: (origin, cb) => cb(null, originAllowed(origin, req)),
     credentials: true,
   })(req, res, next);
 });
@@ -66,14 +68,16 @@ app.use((err, _req, res, _next) => {
 
 const server = http.createServer(app);
 const io = new SocketServer(server, {
-  cors: { origin: config.clientOrigin, credentials: true },
+  cors: { origin: (origin, cb) => cb(null, isAllowedOrigin(origin)), credentials: true },
   pingInterval: 10000,
   pingTimeout: 20000,
 });
 const sockets = setupGameSockets(io);
 
 server.listen(config.port, () => {
-  console.log(`[server] listening on http://localhost:${config.port} (${config.env})`);
+  console.log(`[server] listening on port ${config.port} (${config.env})`);
+  console.log(`[server] allowed browser origins: ${config.clientOrigins.join(", ")}`);
+  console.log(`[server] database: ${dbInfo.kind} (${dbInfo.location})`);
   console.log(`[server] live coaching enabled for: ${config.coachAccounts.join(", ")}`);
   console.log(`[server] explanations: ${reviewService.providerName}${config.groq.apiKey ? "" : " (set GROQ_API_KEY to enable Groq)"}`);
   if (/^(dev-only|change-me)/.test(config.jwtSecret)) console.warn("[server] WARNING: using the default JWT secret; set JWT_SECRET in .env");
@@ -99,3 +103,13 @@ function shutdown() {
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// A transient failure (a stale database connection, a dropped socket) must not
+// take the server down: the data layer reconnects on its own, and dying here
+// would drop every live game. Log loudly and keep serving.
+process.on("uncaughtException", (err) => {
+  console.error("[server] uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] unhandled rejection:", reason);
+});

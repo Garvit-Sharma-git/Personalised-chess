@@ -1,13 +1,254 @@
-import Database from "better-sqlite3";
+import Database from "libsql";
 import { config } from "./config.js";
 
-export const db = new Database(config.dbFile);
+/**
+ * Database access layer.
+ *
+ * Two backends, chosen by environment:
+ *   - a local SQLite file (development, or any host with a persistent disk)
+ *   - a hosted libSQL/Turso primary over the network, for hosts whose
+ *     filesystem is ephemeral (Render's free tier, for example)
+ *
+ * The exported `db` is a small facade rather than the driver object, because
+ * the remote backend needs three behaviours the driver does not provide:
+ *   1. named `@param` placeholders (remote binds positional parameters only),
+ *   2. statements prepared on the connection that is currently in a
+ *      transaction (a statement prepared elsewhere silently loses its write),
+ *   3. recovery when an idle connection is expired by the server.
+ */
+function createConnection() {
+  const { url, authToken } = config.turso;
+  if (!url) {
+    return { instance: new Database(config.dbFile), kind: "file", location: config.dbFile };
+  }
+  return {
+    instance: new Database(url, { authToken }),
+    kind: "remote",
+    location: url.replace(/\?.*$/, ""),
+  };
+}
 
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
-db.pragma("busy_timeout = 5000");
+let conn = createConnection();
+export const dbInfo = { kind: conn.kind, location: conn.location };
 
-db.exec(`
+/** Errors that mean "the connection went stale", not "the query was wrong". */
+const TRANSIENT = /STREAM_EXPIRED|stream has expired|stream not found|baton|ECONNRESET|socket hang up|connection closed/i;
+
+let transactionDepth = 0;
+
+function reconnect() {
+  try {
+    conn.instance.close();
+  } catch {
+    /* already gone */
+  }
+  conn = createConnection();
+}
+
+/**
+ * Run a driver operation, transparently reconnecting once if the connection
+ * had gone stale. Never retried inside a transaction: the transaction died
+ * with the connection, so the caller must redo the whole unit of work.
+ */
+function withConnection(fn) {
+  try {
+    return fn(conn.instance);
+  } catch (err) {
+    const recoverable =
+      conn.kind === "remote" && transactionDepth === 0 && TRANSIENT.test(String(err?.message ?? ""));
+    if (!recoverable) throw err;
+    console.warn("[db] connection went stale; reconnecting");
+    reconnect();
+    return fn(conn.instance);
+  }
+}
+
+/**
+ * Walk SQL, tagging each chunk as code, a string literal or a line comment, so
+ * callers can transform code without touching literals or comments.
+ */
+function* scanSql(sql) {
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch === "'" || ch === '"') {
+      let literal = ch;
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === ch) {
+          if (sql[i + 1] === ch) {
+            literal += ch + ch;
+            i += 2;
+            continue;
+          }
+          literal += ch;
+          i++;
+          break;
+        }
+        literal += sql[i++];
+      }
+      yield { text: literal, kind: "literal" };
+      continue;
+    }
+    if (ch === "-" && sql[i + 1] === "-") {
+      let comment = "";
+      while (i < sql.length && sql[i] !== "\n") comment += sql[i++];
+      yield { text: comment, kind: "comment" };
+      continue;
+    }
+    yield { text: ch, kind: "code" };
+    i++;
+  }
+}
+
+/**
+ * Split a multi-statement script on semicolons, ignoring those inside string
+ * literals and comments, and drop the comments. Drivers disagree about
+ * multi-statement input; doing it here makes the schema apply identically to a
+ * local file and a remote primary.
+ */
+export function splitStatements(sql) {
+  const statements = [];
+  let current = "";
+  for (const { text, kind } of scanSql(sql)) {
+    if (kind === "comment") continue;
+    if (kind === "code" && text === ";") {
+      if (current.trim()) statements.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += text;
+  }
+  if (current.trim()) statements.push(current.trim());
+  return statements;
+}
+
+/** Rewrite `@name` placeholders to positional `?`, remembering their order. */
+function translateNamedParams(sql) {
+  const names = [];
+  let out = "";
+  let code = "";
+  const flush = () => {
+    out += code.replace(/@([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => {
+      names.push(name);
+      return "?";
+    });
+    code = "";
+  };
+  for (const { text, kind } of scanSql(sql)) {
+    if (kind === "code") {
+      code += text;
+    } else {
+      flush();
+      out += text;
+    }
+  }
+  flush();
+  return names.length ? { sql: out, names } : null;
+}
+
+export const db = {
+  prepare(sql) {
+    const translated = translateNamedParams(sql);
+    const finalSql = translated ? translated.sql : sql;
+    const names = translated?.names ?? null;
+
+    // A local file lets us prepare once and reuse, which is what makes SQLite
+    // fast. Remote statements must be created on the current connection.
+    const cached = conn.kind === "file" ? conn.instance.prepare(finalSql) : null;
+
+    const bind = (args) => {
+      if (!names) return args;
+      const [first] = args;
+      if (args.length === 1 && first !== null && typeof first === "object" && !Array.isArray(first)) {
+        return names.map((name) => {
+          if (Object.hasOwn(first, name)) return first[name];
+          if (Object.hasOwn(first, `@${name}`)) return first[`@${name}`];
+          throw new Error(`Missing value for named parameter @${name}`);
+        });
+      }
+      return args;
+    };
+
+    const call = (method, args) =>
+      withConnection((instance) => (cached ?? instance.prepare(finalSql))[method](...bind(args)));
+
+    return {
+      run: (...args) => call("run", args),
+      get: (...args) => call("get", args),
+      all: (...args) => call("all", args),
+      source: sql,
+    };
+  },
+
+  exec(sql) {
+    return withConnection((instance) => instance.exec(sql));
+  },
+
+  pragma(statement, options) {
+    return withConnection((instance) => instance.pragma(statement, options));
+  },
+
+  /**
+   * Transactions. The driver's own wrapper rethrows a failed ROLLBACK, which
+   * hides the error that actually aborted the work; this one preserves it.
+   */
+  transaction(fn) {
+    const run = (...args) => {
+      db.exec("BEGIN");
+      transactionDepth++;
+      let result;
+      try {
+        result = fn(...args);
+      } catch (err) {
+        transactionDepth--;
+        try {
+          conn.instance.exec("ROLLBACK");
+        } catch (rollbackErr) {
+          if (process.env.DEBUG_SQL) console.error("[db] rollback failed:", rollbackErr.message);
+        }
+        throw err;
+      }
+      transactionDepth--;
+      conn.instance.exec("COMMIT");
+      return result;
+    };
+    run.database = db;
+    return run;
+  },
+
+  close() {
+    try {
+      conn.instance.close();
+    } catch {
+      /* already closed */
+    }
+  },
+};
+
+/** Execute a multi-statement script one statement at a time. */
+export function execScript(sql) {
+  for (const statement of splitStatements(sql)) db.exec(statement);
+}
+
+/** Apply a PRAGMA, tolerating backends that do not implement it. */
+function tryPragma(statement) {
+  try {
+    db.pragma(statement);
+    return true;
+  } catch {
+    // A remote primary manages journalling itself and rejects these.
+    return false;
+  }
+}
+
+if (conn.kind === "file") {
+  tryPragma("journal_mode = WAL");
+  tryPragma("busy_timeout = 5000");
+}
+tryPragma("foreign_keys = ON");
+
+execScript(`
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   email         TEXT NOT NULL UNIQUE,
@@ -145,8 +386,7 @@ CREATE TABLE IF NOT EXISTS user_patterns (
   UNIQUE (user_id, pattern)
 );
 
-CREATE INDEX IF NOT EXISTS idx_patterns_user ON user_patterns(user_id, count DESC);
-`);
+CREATE INDEX IF NOT EXISTS idx_patterns_user ON user_patterns(user_id, count DESC);`);
 
 /** Add a column to an existing table if it is missing (lightweight migrations). */
 export function ensureColumn(table, column, ddl) {

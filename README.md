@@ -12,13 +12,14 @@ A small personal chess platform: **play a friend in real time → the game is sa
 
 ```
 client/   React + Vite + react-chessboard  (board UI, pages, Socket.IO client)
-server/   Node + Express + Socket.IO + SQLite (better-sqlite3)
+server/   Node + Express + Socket.IO + SQLite/libSQL (local file or hosted Turso)
   src/services/engine.js       UCI driver + pool for Stockfish (bundled WASM build or a native binary)
   src/services/analysis.js     Stockfish pass: evals, classification, tags, accuracy, key moments
   src/services/chessReview.js  ChessReviewService: engine facts → coaching text (templates + Groq)
   src/services/llm.js          LLM provider abstraction (Groq by default; model set via env)
   src/services/hintService.js  Live hints (coach account only)
   src/services/gameService.js  Authoritative game logic: seating, moves, clocks, results, Elo
+  src/db.js                    Schema + driver facade (named params, reconnect, Turso)
   src/sockets/gameSocket.js    Real-time events, presence, reconnection, clock flagging
   src/lib/evaluation.js        Pure chess heuristics (win%, classification, tactical tags)
 ```
@@ -69,6 +70,55 @@ Analysis depth/time and the engine pool size are tunable in `.env` (`ANALYSIS_DE
 - **Post-game review:** one request per key moment (blunders, mistakes, missed/allowed mates, the turning point, the best "only moves"; capped at 10) plus one report per player. Typically **5–12 requests** on the review model (measured: 8 requests, ~6.7k input / ~1.6k output tokens for a 17-move game).
 - **Live hints** (coach account only, Coach panel switched on): Stockfish runs locally on every position; a Groq explanation on the fast model is requested only when it is your turn and is cached per position — roughly **one request per move you make** (0 when the panel is off).
 - `GET /api/health` reports the models in use and a running request/token count since the server started.
+
+## Deploying (Vercel frontend + Render backend, free tier)
+
+The frontend is a static build on Vercel; the API, WebSockets and Stockfish run
+as a Node service on Render. Because they sit on different sites, browsers block
+the session cookie as third-party, so the API also returns a JWT that the client
+sends as a Bearer token. Render's free tier has no persistent disk, so the
+database lives on Turso (hosted libSQL) — the same SQL, no code changes.
+
+**1. Database — Turso.** Create an account at turso.tech, create a database, and
+copy its URL (`libsql://<db>-<org>.turso.io`) and an auth token.
+
+**2. Backend — Render.** New → Blueprint, point it at this repo; `render.yaml`
+configures everything. Fill in the values it asks for:
+`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `GROQ_API_KEY`, and `CLIENT_ORIGIN`
+(leave `CLIENT_ORIGIN` as a placeholder for now). Note the service URL, e.g.
+`https://chess-coach-api.onrender.com`.
+
+**3. Frontend — Vercel.** Import the repo, set **Root Directory** to `client`,
+and add one environment variable:
+
+    VITE_API_URL = https://chess-coach-api.onrender.com
+
+Vite inlines this at build time, so it must be set before the build. Deploy, and
+note the URL, e.g. `https://personalised-chess.vercel.app`.
+
+**4. Close the loop.** Back on Render, set
+
+    CLIENT_ORIGIN = https://personalised-chess.vercel.app,*.vercel.app
+
+and redeploy. The wildcard also allows Vercel preview deployments.
+
+### Free-tier caveats
+
+- **Cold starts.** A free Render service sleeps after 15 minutes idle, so the
+  first visit takes ~50s to wake. Games survive it: the server restores clocks
+  from the database, resumes interrupted analyses, and clients reconnect on
+  their own.
+- **CPU.** The free instance is 0.1 CPU and Stockfish is CPU-bound, so
+  `render.yaml` lowers the search depth and engine pool. A full-game review
+  takes a couple of minutes rather than seconds, and live hints a few seconds.
+  On a paid instance, raise `ANALYSIS_DEPTH`, `ANALYSIS_MOVETIME_MS`,
+  `HINT_MOVETIME_MS` and `STOCKFISH_POOL_SIZE` back to the defaults in
+  `.env.example`.
+- **Single origin is more secure.** When the server also serves the client
+  (`npm run build && npm start`), the session stays in an httpOnly cookie that
+  JavaScript cannot read. The split-origin setup has to keep the token in
+  `localStorage` instead, which is exposed to XSS. If you later put both behind
+  one domain, unset `VITE_API_URL` and the app returns to cookie auth.
 
 ## How to play
 

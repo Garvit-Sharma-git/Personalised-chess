@@ -44,9 +44,12 @@ export function publicUser(row) {
 }
 
 export function setAuthCookie(res, token) {
+  // SameSite=None is only honoured on Secure cookies; fall back to Lax when the
+  // deployment is not HTTPS so local development keeps working.
+  const sameSite = config.cookieSameSite === "none" && config.cookieSecure ? "none" : config.cookieSameSite;
   res.cookie(config.cookieName, token, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite,
     secure: config.cookieSecure,
     maxAge: 30 * 24 * 60 * 60 * 1000,
     path: "/",

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { db } from "../db.js";
 import { requireAuth } from "../lib/auth.js";
 import { isCoachAccount } from "../config.js";
@@ -151,21 +152,32 @@ const hintLimiter = rateLimit({
  * Live move suggestions. The privilege is checked here, on the server, against
  * the authenticated account's email; the client never decides this.
  */
-router.post("/:code/hint", hintLimiter, async (req, res) => {
-  if (!isCoachAccount(req.user.email)) {
-    return res.status(403).json({ error: "Live suggestions are not enabled for this account" });
-  }
-  const game = loadViewable(req, res);
-  if (!game) return;
-  if (!colorOfUser(game, req.user.id)) return res.status(403).json({ error: "Only a player in this game can request hints" });
-  if (game.status !== "active") return res.status(409).json({ error: "Hints are only available during an active game" });
-  try {
-    const chess = rebuildChess(game.id);
-    const hint = await computeHint(chess.fen(), { explain: req.body?.explain !== false });
-    res.json({ hint, forViewer: (chess.turn() === "w" ? "white" : "black") === colorOfUser(game, req.user.id) });
-  } catch (err) {
-    handle(res, err);
-  }
-});
+router.post(
+  "/:code/hint",
+  hintLimiter,
+  asyncHandler(async (req, res) => {
+    if (!isCoachAccount(req.user.email)) {
+      return res.status(403).json({ error: "Live suggestions are not enabled for this account" });
+    }
+    const game = loadViewable(req, res);
+    if (!game) return;
+    if (!colorOfUser(game, req.user.id)) {
+      return res.status(403).json({ error: "Only a player in this game can request hints" });
+    }
+    if (game.status !== "active") {
+      return res.status(409).json({ error: "Hints are only available during an active game" });
+    }
+    try {
+      const chess = rebuildChess(game.id);
+      const hint = await computeHint(chess.fen(), { explain: req.body?.explain !== false });
+      res.json({
+        hint,
+        forViewer: (chess.turn() === "w" ? "white" : "black") === colorOfUser(game, req.user.id),
+      });
+    } catch (err) {
+      handle(res, err);
+    }
+  })
+);
 
 export default router;

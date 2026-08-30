@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../lib/api.js";
+import { api, downloadPgn } from "../lib/api.js";
 import { useAuth } from "../lib/auth.jsx";
 import { CLASS_META, resultText, REASON_LABEL, formatDate } from "../lib/format.js";
 import { kingSquare, START_FEN, turnOf } from "../lib/chessUtil.js";
@@ -162,9 +162,9 @@ export default function ReviewPage() {
           </div>
         </div>
         <div className="btn-row">
-          <a className="btn btn-sm" href={`/api/games/${game.code}/pgn`} download>
+          <button className="btn btn-sm" onClick={() => downloadPgn(game.code).catch((e) => setError(e.message))}>
             Download PGN
-          </a>
+          </button>
           {isPlayer && (status === "done" || status === "error") && (
             <button className="btn btn-sm" onClick={rerun} disabled={rerunning}>
               {rerunning ? "Queued…" : "Re-run analysis"}

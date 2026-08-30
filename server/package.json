@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
-    "better-sqlite3": "^13.0.3",
     "chess.js": "^1.4.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -19,8 +18,12 @@
     "express-rate-limit": "^8.2.1",
     "groq-sdk": "^1.6.0",
     "jsonwebtoken": "^9.0.2",
+    "libsql": "^0.5.29",
     "socket.io": "^4.8.3",
     "stockfish": "^18.0.8",
     "zod": "^4.1.13"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -1,0 +1,72 @@
+# Render Blueprint for the backend API (WebSockets + Stockfish + Groq).
+# The frontend is deployed separately on Vercel from the client/ directory.
+#
+# Render's free tier has no persistent disk, so the database lives on Turso
+# (hosted libSQL). Values marked `sync: false` must be filled in on Render.
+services:
+  - type: web
+    name: chess-coach-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+
+      # Generated once by Render and kept across deploys.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # The frontend lives on another site, so the session cookie must be
+      # cross-site capable. Browsers that block third-party cookies fall back
+      # to the Bearer token the API returns on login.
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: none
+
+      # Your Vercel URL(s). Comma-separated; "*.vercel.app" allows previews.
+      # e.g. https://personalised-chess.vercel.app,*.vercel.app
+      - key: CLIENT_ORIGIN
+        sync: false
+
+      # Hosted database (Turso): libsql://<db>-<org>.turso.io and its token.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+
+      # Natural-language coaching.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_FALLBACK_MODEL
+        value: openai/gpt-oss-20b
+      - key: GROQ_HINT_MODEL
+        value: openai/gpt-oss-20b
+
+      # Only this account may request live move suggestions during a game.
+      - key: COACH_ACCOUNTS
+        value: garvitsharma1994@gmail.com
+
+      # The free instance is 0.1 CPU, and Stockfish is CPU-bound: these keep a
+      # full-game review to a couple of minutes instead of many. Raise them on
+      # a paid instance (see the defaults in .env.example).
+      - key: STOCKFISH_POOL_SIZE
+        value: "1"
+      - key: STOCKFISH_HASH_MB
+        value: "32"
+      - key: ANALYSIS_DEPTH
+        value: "12"
+      - key: ANALYSIS_MOVETIME_MS
+        value: "300"
+      - key: HINT_DEPTH
+        value: "14"
+      - key: HINT_MOVETIME_MS
+        value: "700"
