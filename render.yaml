@@ -9,7 +9,9 @@ services:
     runtime: node
     plan: free
     rootDir: server
-    buildCommand: npm install
+    # Pruning drops the unused Stockfish builds: ~279 MB of dependencies
+    # becomes ~36 MB, which keeps the free-tier build well inside its limits.
+    buildCommand: npm install && npm run prune-engine
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
