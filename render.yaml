@@ -32,8 +32,11 @@ services:
       - key: COOKIE_SAMESITE
         value: none
 
-      # Your Vercel URL(s). Comma-separated; "*.vercel.app" allows previews.
-      # e.g. https://personalised-chess.vercel.app,*.vercel.app
+      # Your exact Vercel URL, e.g. https://personalised-chess.vercel.app
+      # Prefer the exact origin: a "*.vercel.app" wildcard would let ANY site
+      # hosted on vercel.app make credentialed calls to this API. Add the
+      # wildcard only if you need preview deployments to work, and understand
+      # that trade-off.
       - key: CLIENT_ORIGIN
         sync: false
 

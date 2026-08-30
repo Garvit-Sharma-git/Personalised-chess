@@ -98,9 +98,11 @@ note the URL, e.g. `https://personalised-chess.vercel.app`.
 
 **4. Close the loop.** Back on Render, set
 
-    CLIENT_ORIGIN = https://personalised-chess.vercel.app,*.vercel.app
+    CLIENT_ORIGIN = https://personalised-chess.vercel.app
 
-and redeploy. The wildcard also allows Vercel preview deployments.
+and redeploy. Use the exact origin: appending `,*.vercel.app` makes preview
+deployments work, but also lets any site hosted on vercel.app call your API with
+credentials, so only add it if you want that trade-off.
 
 ### Free-tier caveats
 
