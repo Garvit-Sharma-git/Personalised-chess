@@ -1,5 +1,7 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./lib/auth.jsx";
+import { useSlowLoad } from "./lib/useSlowLoad.js";
+import WakingNotice from "./components/WakingNotice.jsx";
 import Layout from "./components/Layout.jsx";
 import AuthPage from "./pages/AuthPage.jsx";
 import HomePage from "./pages/HomePage.jsx";
@@ -11,7 +13,8 @@ import ProfilePage from "./pages/ProfilePage.jsx";
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
   const location = useLocation();
-  if (loading) return <div className="page-loading">Loading…</div>;
+  const slow = useSlowLoad(loading);
+  if (loading) return <div className="page-loading">{slow ? <WakingNotice /> : "Loading…"}</div>;
   if (!user) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
   return children;
 }

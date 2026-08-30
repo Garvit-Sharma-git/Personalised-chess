@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/auth.jsx";
+import { useSlowLoad } from "../lib/useSlowLoad.js";
+import WakingNotice from "../components/WakingNotice.jsx";
 
 export default function AuthPage({ mode }) {
   const { login, register, user } = useAuth();
@@ -10,6 +12,7 @@ export default function AuthPage({ mode }) {
   const [form, setForm] = useState({ identifier: "", email: "", username: "", password: "" });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const slow = useSlowLoad(busy);
   const isLogin = mode === "login";
 
   if (user) {
@@ -81,6 +84,7 @@ export default function AuthPage({ mode }) {
             />
           </label>
           {error && <div className="error">{error}</div>}
+          {slow && <WakingNotice compact />}
           <button className="btn btn-primary" disabled={busy}>
             {busy ? "…" : isLogin ? "Log in" : "Create account"}
           </button>

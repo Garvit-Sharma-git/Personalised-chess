@@ -11,6 +11,8 @@ import PlayerCard from "../components/PlayerCard.jsx";
 import MoveList from "../components/MoveList.jsx";
 import PromotionDialog from "../components/PromotionDialog.jsx";
 import CoachPanel from "../components/CoachPanel.jsx";
+import WakingNotice from "../components/WakingNotice.jsx";
+import { useSlowLoad } from "../lib/useSlowLoad.js";
 
 export default function GamePage() {
   const { code } = useParams();
@@ -45,6 +47,7 @@ export default function GamePage() {
   const hintReq = useRef(0);
 
   const upperCode = code.toUpperCase();
+  const connectingSlowly = useSlowLoad(!game && !fatal);
 
   // --- socket lifecycle -------------------------------------------------
   useEffect(() => {
@@ -252,7 +255,7 @@ export default function GamePage() {
       </div>
     );
   }
-  if (!game) return <div className="page-loading">Connecting…</div>;
+  if (!game) return <div className="page-loading">{connectingSlowly ? <WakingNotice /> : "Connecting…"}</div>;
 
   const shareUrl = `${window.location.origin}/game/${game.code}`;
   const topColor = orientation === "white" ? "black" : "white";

@@ -29,6 +29,9 @@ function createConnection() {
 }
 
 let conn = createConnection();
+// Bumped on every reconnect so cached statements bound to the dead connection
+// are discarded rather than reused.
+let connectionGeneration = 0;
 export const dbInfo = { kind: conn.kind, location: conn.location };
 
 /** Errors that mean "the connection went stale", not "the query was wrong". */
@@ -43,6 +46,7 @@ function reconnect() {
     /* already gone */
   }
   conn = createConnection();
+  connectionGeneration++;
 }
 
 /**
@@ -153,9 +157,18 @@ export const db = {
     const finalSql = translated ? translated.sql : sql;
     const names = translated?.names ?? null;
 
-    // A local file lets us prepare once and reuse, which is what makes SQLite
-    // fast. Remote statements must be created on the current connection.
-    const cached = conn.kind === "file" ? conn.instance.prepare(finalSql) : null;
+    // Preparing costs a network round trip remotely, which would double the
+    // latency of every query, so statements are cached. The exception is
+    // inside a transaction: there a statement must be created on the
+    // transaction's own connection, or its write is silently discarded.
+    let cache = null;
+    const resolve = (instance) => {
+      if (conn.kind === "remote" && transactionDepth > 0) return instance.prepare(finalSql);
+      if (!cache || cache.generation !== connectionGeneration) {
+        cache = { generation: connectionGeneration, statement: instance.prepare(finalSql) };
+      }
+      return cache.statement;
+    };
 
     const bind = (args) => {
       if (!names) return args;
@@ -171,7 +184,7 @@ export const db = {
     };
 
     const call = (method, args) =>
-      withConnection((instance) => (cached ?? instance.prepare(finalSql))[method](...bind(args)));
+      withConnection((instance) => resolve(instance)[method](...bind(args)));
 
     return {
       run: (...args) => call("run", args),

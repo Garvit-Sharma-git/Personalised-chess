@@ -1554,3 +1554,24 @@ button {
     grid-template-areas: "label move" "line line" "btn btn";
   }
 }
+
+/* ---------- slow first load (free-tier cold start) ---------- */
+.waking {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.waking-compact {
+  padding: 10px 12px;
+}
+.waking .spinner {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}

@@ -8,6 +8,11 @@ services:
     name: chess-coach-api
     runtime: node
     plan: free
+    # Put the API in the region nearest your Turso database: every chess move
+    # costs a handful of database round trips, so a mismatched pair (e.g. an
+    # Oregon service talking to a Mumbai database) adds noticeable lag.
+    # Turso aws-ap-south-1 (Mumbai) pairs best with Render's singapore.
+    region: singapore
     rootDir: server
     # Pruning drops the unused Stockfish builds: ~279 MB of dependencies
     # becomes ~36 MB, which keeps the free-tier build well inside its limits.
